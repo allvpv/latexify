@@ -2,7 +2,18 @@
 
 script_file="$(realpath ${BASH_SOURCE[0]})"
 script_dir="$(dirname ${script_file})"
-source ${script_dir}/latexify.config
+
+specific_config="$PWD/latexify.config"
+fallback_config="${script_dir}/latexify.config"
+
+if test -f "$specific_config"; then
+  echo "using config file from current directory"
+  source "${specific_config}"
+else
+  echo "using fallback config file"
+  source "${fallback_config}"
+fi
+
 
 src=$1
 raw=${src%.tex}
