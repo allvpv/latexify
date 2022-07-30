@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+
+script_file="$(realpath ${BASH_SOURCE[0]})"
+script_dir="$(dirname ${script_file})"
+source ${script_dir}/latexify.config
+
+src=$1
+raw=${src%.tex}
+dest=${raw}.pdf
+log=${raw}.latexify.log
+
+
+file_new="./${tmpdir}/${dest}"
+file_old="./${dest}"
+
+ok="$(tput setaf 2)$(tput bold)[ OK ]$(tput sgr 0)"
+err="$(tput setaf 1)$(tput bold)[ ERR ]$(tput sgr 0)"
+
+pid=0
+prev_status=-1
+
+if [ -z ${pdfviewer+x} ]; then
+  echo "Error. Set variable pdfviewer to your favourite '.pdf' viewer" 1>&2
+  exit -1
+fi
+
+mkdir -p "./${tmpdir}"
+
+${pdfviewer} "${dest}" &
+
+pdfviewer_pid=$!
+
+echo "check the log file at /tmp/${log}"
+
+if [ "$(uname)" = "Darwin" ] ; then
+  echo "MacOS detected... using fswatch"
+  command="fswatch --one-event --event Updated $@"
+elif [ "$(uname)" = "Linux" ] ; then
+  echo "Linux detected... using inotify"
+  command="inotifywait -qq -e close_write $@"
+fi
+
+while ( ${command} ) > /dev/null
+do
+  # Inovke subshell and wait for compilation to end, before spawning pdflatex
+  # once again. Why this way instead of simply doing everything in main shell
+  # synchronously?  To prevent leaking events while inotifywait is not active.
+  # Still some events my leak and pdf might be a bit outdated.
+  wait ${pid} &> "/tmp/${log}"
+  (
+      ${producer} "${src}" &> "/tmp/${log}"
+
+      if [[ $? -ne 0 ]] ; then
+        echo -ne "${err} "
+        # Indicate status in vim buffer name
+        # nvr --nostart -sc "file [err]:${raw}"
+      else 
+        echo -ne "${ok} "
+
+      # The second check ensures that the file in working directory is newer
+      # before copying it to main directory. The omition of second check causes
+      # some PDF viewers to unnecessary refresh when the old file is copied once
+      # again to main directory (due to compilation errors); zathura, for
+      # example, blinks on every refresh, so it is good to avoid refreshing when
+      # possible.
+      if [[ ! -f "${file_old}" ]] || [[ "${file_new}" -nt "${file_old}" ]]; then
+        if [[ -s "${file_new}" ]]; then
+          cp "${file_new}" "${file_old}"
+          # Some viewers do not have built-in file watch and are using HUP
+          # signal for page refresh.
+          if [[ $hupsignal = true ]]; then
+            kill -HUP ${pdfviewer_pid}
+          fi
+        fi
+      fi
+        # Indicate status in vim buffer name
+        # nvr --nostart -sc "file [ok]:${raw}"
+      fi
+  ) &
+  pid=$! 
+done
+
